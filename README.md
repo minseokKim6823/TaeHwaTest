@@ -401,3 +401,161 @@ if result and result[0]:
 else:
     print("No text detected!")
 ```
+
+### +추가 사항
+학습데이터가 부족 했으므로 추가적인 학습데이터 생성이 불가피했다 따라서
+```python
+import cv2
+import numpy as np
+import random
+from PIL import Image
+
+
+image = Image.open('C:/Users/alstj/Desktop/image1.jpg')
+image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+
+
+def apply_augmentation(image_cv):
+    augmented_image = image_cv.copy()
+
+    # 가우시안 블러
+    if random.random() < 0.5:
+        blur_limit = random.randint(3, 7)
+        # blur_limit이 짝수일 경우 홀수로 변경
+        if blur_limit % 2 == 0:
+            blur_limit += 1
+        augmented_image = cv2.GaussianBlur(augmented_image, (blur_limit, blur_limit), 0)
+
+    # 가우시안 노이즈
+    if random.random() < 0.5:
+        noise_var = random.uniform(10.0, 50.0)
+        gauss_noise = np.random.normal(0, noise_var, augmented_image.shape).astype(np.uint8)
+        augmented_image = cv2.add(augmented_image, gauss_noise)
+
+
+    if random.random() < 0.7:
+        rows, cols, _ = augmented_image.shape
+        shift_x = random.uniform(-0.1, 0.1) * cols
+        shift_y = random.uniform(-0.1, 0.1) * rows
+        scale = random.uniform(0.9, 1.1)
+        rotation = random.randint(-15, 15)
+
+        # 이동 행렬
+        M = np.float32([[1, 0, shift_x], [0, 1, shift_y]])
+        augmented_image = cv2.warpAffine(augmented_image, M, (cols, rows))
+
+        # 회전 및 크기 조정
+        M = cv2.getRotationMatrix2D((cols / 2, rows / 2), rotation, scale)
+        augmented_image = cv2.warpAffine(augmented_image, M, (cols, rows))
+
+    if random.random() < 0.5:
+        distort_limit = random.uniform(0.05, 0.1)
+        augmented_image = cv2.resize(augmented_image, None, fx=1 + distort_limit, fy=1 + distort_limit)
+
+    # 밝기 및 대비 변화
+    if random.random() < 0.5:
+        brightness = random.uniform(-0.2, 0.2)
+        contrast = random.uniform(-0.2, 0.2)
+        augmented_image = cv2.convertScaleAbs(augmented_image, alpha=1 + contrast, beta=brightness * 255)
+
+    return augmented_image
+
+
+# 증강된 이미지 생성 및 저장
+augmented_images = []
+num_samples = 5  # 생성할 데이터 개수
+
+for i in range(num_samples):
+    augmented = apply_augmentation(image_cv)
+    output_aug_path = f"C:/Users/alstj/Desktop/data/image1_aug_{i}.jpg"
+    cv2.imwrite(output_aug_path, augmented)
+    augmented_images.append(output_aug_path)
+
+# 생성된 파일 목록 반환
+augmented_images
+```
+데이터 증강을 통해 학습할 데이터를 추가적으로 만들었다<br><br><br>
+
+이미지 자체로는 학습이 불가능 하다 따라서 이미지를 .mdb형태로 만들어 줘야하는데
+이 떄,
+```python
+import os
+import lmdb
+import cv2
+import numpy as np
+
+def check_image_is_valid(image_path):
+    """이미지가 올바르게 로드될 수 있는지 확인하는 함수"""
+    try:
+        img = cv2.imread(image_path)
+        if img is None:
+            return False
+        return True
+    except:
+        return False
+
+def writeCache(env, cache):
+    """LMDB에 데이터 저장"""
+    with env.begin(write=True) as txn:
+        for k, v in cache.items():
+            txn.put(k.encode(), v)
+
+def createDataset(input_path, output_path, map_size=10**9):
+    """LMDB 데이터셋 생성"""
+    os.makedirs(output_path, exist_ok=True)
+    env = lmdb.open(output_path, map_size=map_size)
+
+    with open(input_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    cache = {}
+    cnt = 1
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue  # 빈 줄 스킵
+
+        parts = line.split(maxsplit=1)  # 공백을 기준으로 1회만 split (첫 번째 값: 이미지 경로, 나머지: 라벨)
+        if len(parts) < 2:
+            print(f"⚠️ 잘못된 형식: {line}")
+            continue
+
+        img_path, label = parts  # 첫 번째 값이 이미지 경로, 두 번째 값이 라벨
+
+        if not os.path.exists(img_path) or not check_image_is_valid(img_path):
+            print(f"⚠️ 이미지를 찾을 수 없음: {img_path}")
+            continue
+
+        # 이미지 로드 및 인코딩 (바이너리 형태)
+        img = cv2.imread(img_path)
+        _, img_encoded = cv2.imencode('.jpg', img)
+        img_bin = img_encoded.tobytes()
+
+        image_key = f'image-{cnt:09d}'
+        label_key = f'label-{cnt:09d}'
+
+        cache[image_key] = img_bin  # 이미지 데이터를 LMDB에 저장
+        cache[label_key] = label.encode()  # 문자열을 바이너리로 변환하여 저장
+
+        if cnt % 1000 == 0:
+            writeCache(env, cache)
+            cache = {}
+            print(f'✅ {cnt}개의 데이터 변환 완료')
+
+        cnt += 1
+
+    writeCache(env, cache)
+
+    with env.begin(write=True) as txn:
+        txn.put("num-samples".encode(), str(cnt - 1).encode())
+
+    print(f"🎉 총 {cnt - 1}개의 데이터가 변환되었습니다!")
+
+if __name__ == "__main__":
+    input_path = "C:/data/label.txt"  # label.txt 파일 (이미지 경로 + 라벨 정보)
+    output_path = "C:/data/lmdb"  # LMDB 데이터셋 저장 경로
+
+    createDataset(input_path, output_path)
+```
+위코드를 사용하여 만들었다.

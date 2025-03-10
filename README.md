@@ -150,7 +150,7 @@ img_path = 'C:/Users/alstj/Desktop/hello.jpg'
 # 이미지를 그레이스케일로 불러오기
 gray_img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
 
-# 흑백(바이너리) 이미지로 변환: 임계값 210 이하 -> 0, 초과 -> 255
+# 흑백(바이너리) 이미지로 변환: 임계값 210 이하 -> 0, 초과 -> 255 임계값을 임의로 조정했음
 _, binary_img = cv2.threshold(gray_img, 210, 255, cv2.THRESH_BINARY)
 
 # 변환된 이미지를 임시 파일로 저장 (OCR은 파일 경로를 사용)
